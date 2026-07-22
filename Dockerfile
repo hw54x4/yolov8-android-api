@@ -1,40 +1,25 @@
-import os
-from flask import Flask, request, jsonify
-from ultralytics import YOLO
-import cv2
-import numpy as np
+FROM python:3.12-slim
 
-app = Flask(__name__)
+# Install system dependencies untuk OpenCV
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Load model asli YOLOv8s
-model = YOLO("best.pt")
+# Setup user untuk environment Hugging Face
+RUN useradd -m -u 1000 user
+USER user
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH
 
-@app.route("/detect", methods=["POST"])
-def detect_object():
-    if 'image' not in request.files:
-        return jsonify({"error": "Tidak ada gambar yang dikirim"}), 400
+WORKDIR $HOME/app
 
-    file = request.files['image']
-    img_bytes = file.read()
-    
-    # Konversi ke format gambar OpenCV
-    nparr = np.frombuffer(img_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+# Copy requirement dan install
+COPY --chown=user requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-    # Deteksi dengan YOLOv8 (resolusi 1280p, confidence 0.25)
-    results = model(img, imgsz=1280, conf=0.25)
-    
-    predictions = []
-    for box in results[0].boxes:
-        coords = box.xyxy[0].tolist() # [xmin, ymin, xmax, ymax]
-        predictions.append({
-            "bbox": [int(c) for c in coords],
-            "confidence": float(box.conf[0]),
-            "label": model.names[int(box.cls[0])]
-        })
+# Copy sisa file ke dalam container
+COPY --chown=user . $HOME/app
 
-    return jsonify({"status": "success", "predictions": predictions})
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+# Jalankan server menggunakan Gunicorn di port 7860
+CMD ["gunicorn", "--bind", "0.0.0.0:7860", "--timeout", "120", "app:app"]
